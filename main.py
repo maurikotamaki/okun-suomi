@@ -79,15 +79,16 @@ def main() -> int:
     print("# ROBUSTISUUSTARKASTELU")
     print("#" * 70)
 
-    # 1) HAC (Newey–West) -keskivirheet, Durbin–Watson ja Breusch–Godfrey
-    #    alkuperäiselle (koko aineisto, v/v) spesifikaatiolle.
+    # 1) OLS/Newey–West/Andrews–Monahan-keskivirheet, Durbin–Watson ja
+    #    Breusch–Godfrey alkuperäiselle (koko aineisto, v/v) spesifikaatiolle.
     perus = analyysi.estimoi_robusti(
         aineisto,
         y_sarake="tyottomyysasteen_muutos",
         x_sarakkeet=["bkt_kasvu"],
         nimi="Koko aineisto (v/v)",
-        kasvu_sarake="bkt_kasvu",
-        hac_vahimmaisviive=analyysi.NW_VAHIMMAISVIIVE_VV,
+        kasvu_sarakkeet=["bkt_kasvu"],
+        yksikko="v/v",
+        nw_vahimmaisviive=analyysi.NW_VAHIMMAISVIIVE_VV,
     )
     analyysi.tulosta_hac_diagnostiikka(perus)
 
@@ -98,30 +99,34 @@ def main() -> int:
         y_sarake="tyottomyysasteen_muutos",
         x_sarakkeet=["bkt_kasvu"],
         nimi="Ilman 2020–2021",
-        kasvu_sarake="bkt_kasvu",
-        hac_vahimmaisviive=analyysi.NW_VAHIMMAISVIIVE_VV,
+        kasvu_sarakkeet=["bkt_kasvu"],
+        yksikko="v/v",
+        nw_vahimmaisviive=analyysi.NW_VAHIMMAISVIIVE_VV,
     )
     covid_dummy = analyysi.estimoi_robusti(
         aineisto,
         y_sarake="tyottomyysasteen_muutos",
         x_sarakkeet=["bkt_kasvu", "covid"],
         nimi="Covid-dummy mukana",
-        kasvu_sarake="bkt_kasvu",
-        hac_vahimmaisviive=analyysi.NW_VAHIMMAISVIIVE_VV,
+        kasvu_sarakkeet=["bkt_kasvu"],
+        yksikko="v/v",
+        nw_vahimmaisviive=analyysi.NW_VAHIMMAISVIIVE_VV,
     )
     analyysi.tulosta_kolmen_otoksen_taulukko([perus, ilman_covidia, covid_dummy])
 
     # 3) Vaihtoehtoinen spesifikaatio: neljännesmuutokset vuosimuutosten
     #    sijaan (kausitasoitettu BKT edellisneljänneksestä ja kausitasoitettu
-    #    työttömyysaste, aggregoitu kuukausista neljännekselle).
+    #    työttömyysaste, aggregoitu kuukausista neljännekselle), BKT-kasvun
+    #    viiveillä 0–4 neljännestä.
     print()
     print(
         "Haetaan vaihtoehtoinen aineisto neljännesmuutos-spesifikaatiota "
         "varten (kausitasoitettu BKT: StatFin/ntp/132h.px, kausitasoitettu "
-        "työttömyysaste: StatFin/tyti/135z.px) ..."
+        "työttömyysaste: StatFin/tyti/135z.px), BKT-kasvun viiveillä 0-4 ..."
     )
+    VIIVEET_QOQ = 4
     try:
-        aineisto_qoq = datahaku.hae_ja_yhdista_qoq()
+        aineisto_qoq = datahaku.hae_ja_yhdista_qoq(maksimiviive=VIIVEET_QOQ)
     except RuntimeError as exc:
         print(
             f"VIRHE: neljännesmuutos-aineiston haku epäonnistui: {exc}",
@@ -136,32 +141,42 @@ def main() -> int:
     print("...")
     print(aineisto_qoq.round(2).tail(4).to_string())
 
+    qoq_sarakkeet = [f"bkt_kasvu_qoq_L{i}" for i in range(VIIVEET_QOQ + 1)]
     qoq = analyysi.estimoi_robusti(
         aineisto_qoq,
         y_sarake="tyottomyysasteen_muutos_qoq",
-        x_sarakkeet=["bkt_kasvu_qoq"],
-        nimi="Neljännesmuutokset (q/q)",
-        kasvu_sarake="bkt_kasvu_qoq",
-        hac_vahimmaisviive=analyysi.NW_VAHIMMAISVIIVE_QOQ,
-        paallekkaiset_muutokset=False,
+        x_sarakkeet=qoq_sarakkeet,
+        nimi=f"Neljännesmuutokset, viiveet 0-{VIIVEET_QOQ} (q/q)",
+        kasvu_sarakkeet=qoq_sarakkeet,
+        yksikko="q/q",
+        nw_vahimmaisviive=analyysi.NW_VAHIMMAISVIIVE_QOQ,
     )
     analyysi.tulosta_hac_diagnostiikka(qoq)
 
-    # 4) Kynnyskasvujen (-a/b) yhteenveto kaikista spesifikaatioista.
-    print()
-    print("=" * 70)
-    print("Kynnyskasvu -a/b kaikissa spesifikaatioissa (BKT:n kasvuvauhti,")
-    print("jolla työttömyysaste ei muutu)")
-    print("=" * 70)
-    for nimi, kynnys in [
-        ("Alkuperäinen (v/v, OLS)", tulos.kynnyskasvu),
-        ("Koko aineisto (v/v, HAC)", perus.kynnyskasvu()),
-        ("Ilman 2020–2021 (v/v, HAC)", ilman_covidia.kynnyskasvu()),
-        ("Covid-dummy, ei-covid-tila (v/v, HAC)", covid_dummy.kynnyskasvu()),
-        ("Neljännesmuutokset (q/q, HAC)", qoq.kynnyskasvu()),
-    ]:
-        print(f"  {nimi:<42}{kynnys:>8.3f} %")
-    print("=" * 70)
+    # 4) Kynnyskasvun yhteenveto kaikista spesifikaatioista, annualisoituna
+    #    samaan (%/vuosi) yksikköön, jotta v/v- ja q/q-mallit ovat suoraan
+    #    vertailukelpoisia.
+    analyysi.tulosta_kynnyskasvu_yhteenveto(
+        [
+            ("Alkuperäinen (v/v, OLS, ei-robusti)", tulos.kynnyskasvu, "v/v"),
+            ("Koko aineisto (v/v, konservatiivinen HAC)", perus.kynnyskasvu(), "v/v"),
+            (
+                "Ilman 2020–2021 (v/v, konservatiivinen HAC)",
+                ilman_covidia.kynnyskasvu(),
+                "v/v",
+            ),
+            (
+                "Covid-dummy, ei-covid-tila (v/v, konservatiivinen HAC)",
+                covid_dummy.kynnyskasvu(),
+                "v/v",
+            ),
+            (
+                f"Neljännesmuutokset, Σb viiveille 0-{VIIVEET_QOQ} (q/q, konservatiivinen HAC)",
+                qoq.kynnyskasvu(),
+                "q/q",
+            ),
+        ]
+    )
 
     return 0
 

@@ -120,12 +120,21 @@ def tulosta_tulokset(tulos: OkuninLainTulos) -> None:
 # neljänneksillä päällekkäinen (t ja t-1 jakavat kolme neljästä termistä),
 # mikä synnyttää mekaanisesti MA(3)-tyyppisen autokorrelaation jäännöksiin
 # (ks. esim. Hodrick 1992). Tavanomaiset OLS-keskivirheet aliarvioivat siksi
-# epävarmuuden, ja niiden tilalle/rinnalle lasketaan Newey–West (HAC)
-# -keskivirheet, joissa viiveiden lukumäärä on vähintään 4.
+# epävarmuuden. Tässä lasketaan RINNAKKAIN kolme keskivirhevaihtoehtoa:
+#   - OLS (klassinen, ei robusti)
+#   - Newey–West (HAC, Bartlett-ydin)
+#   - Andrews–Monahan (1992) esivalkaistu HAC (VAR(1)-esivalkaisu +
+#     Newey–West-ydin jäännösprosessille + "uudelleenvärjäys")
+# Koska otos on pieni (~60-66 havaintoa) ja HAC-estimaattorit ovat
+# tunnetusti pienessä otoksessa harhaisia ALASPÄIN (Andrews 1991), PÄÄTULOS
+# on kunkin mallin osalta se HAC-vaihtoehto, joka antaa SUUREMMAN
+# (konservatiivisemman) keskivirheen BKT-kasvun kokonaisvaikutukselle,
+# ei automaattisesti Newey–West tai automaattisesti pienin arvo.
 # ---------------------------------------------------------------------------
 
 NW_VAHIMMAISVIIVE_VV = 4  # v/v-erotusten päällekkäisyyden takia (MA(3))
 NW_VAHIMMAISVIIVE_QOQ = 1  # neljännesmuutoksissa ei rakenteellista päällekkäisyyttä
+PW_VAHIMMAISVIIVE = 1  # esivalkaisun jälkeen jäännösautokorrelaatio on jo pieni
 
 
 def newey_west_viiveet(havaintoja: int, vahimmaisviive: int = 1) -> int:
@@ -136,26 +145,135 @@ def newey_west_viiveet(havaintoja: int, vahimmaisviive: int = 1) -> int:
     return max(vahimmaisviive, nyrkkisaanto, 1)
 
 
+def _bartlett_painot(viiveet: int) -> np.ndarray:
+    return 1 - np.arange(viiveet + 1) / (viiveet + 1.0)
+
+
+def _skalaariksi(x) -> float:
+    """Poimii yhden luvun statsmodelsin t_test/wald_test-tuloksesta
+    riippumatta siitä, onko se 0-, 1- vai 2-ulotteinen ndarray (vaihtelee
+    statsmodels-version ja syötteen muodon mukaan)."""
+    return float(np.asarray(x).reshape(-1)[0])
+
+
+def annualisoi_kynnyskasvu(kynnyskasvu: float, yksikko: str) -> float:
+    """Muuntaa kynnyskasvun vuositasolle (%/vuosi) sen alkuperäisestä
+    yksiköstä. "v/v" (vuosimuutos) on jo vuositasoinen, joten se palautuu
+    sellaisenaan. "q/q" (neljännesmuutos) annualisoidaan korkoa korolle
+    -periaatteella, g_v = (1+g_q/100)^4 - 1, olettaen sama kasvuvauhti
+    joka neljännes (tasapainotulkinta kynnyskasvulle)."""
+    if yksikko == "q/q":
+        return ((1 + kynnyskasvu / 100) ** 4 - 1) * 100
+    if yksikko == "v/v":
+        return kynnyskasvu
+    raise ValueError(f"Tuntematon yksikkö: {yksikko!r} (odotettiin 'v/v' tai 'q/q')")
+
+
+def _newey_west_kovarianssi(
+    ols: sm.regression.linear_model.RegressionResultsWrapper,
+    vahimmaisviive: int,
+) -> tuple[np.ndarray, int]:
+    """Tavallinen Newey–West-HAC-kovarianssi (Bartlett-ydin, pienen otoksen
+    korjaus). Käyttää statsmodelsin omaa, testattua toteutusta."""
+    viiveet = newey_west_viiveet(int(ols.nobs), vahimmaisviive)
+    robusti = ols.get_robustcov_results(
+        cov_type="HAC", maxlags=viiveet, use_correction=True
+    )
+    return np.asarray(robusti.cov_params()), viiveet
+
+
+def _andrews_monahan_kovarianssi(
+    ols: sm.regression.linear_model.RegressionResultsWrapper,
+    vahimmaisviive: int = PW_VAHIMMAISVIIVE,
+) -> tuple[np.ndarray, int]:
+    """Andrews & Monahan (1992) esivalkaistu HAC-kovarianssi.
+
+    Statsmodels ei tarjoa esivalkaisua valmiina, joten se on toteutettu
+    tässä manuaalisesti standardimenetelmällä (vrt. R:n sandwich-paketin
+    ``vcovHAC(..., prewhite = TRUE)``):
+
+    1. Muodostetaan havaintokohtaiset "pisteet" xu_t = x_t · u_t (x_t =
+       selittäjärivi, u_t = OLS-jäännös).
+    2. Sovitetaan pisteprosessiin VAR(1): xu_t = A·xu_{t-1} + v_t (A
+       estimoidaan pienimmän neliösumman menetelmällä). v_t on
+       "esivalkaistu" jäännösprosessi, jonka pitäisi olla huomattavasti
+       vähemmän autokorreloitunut kuin xu_t itse.
+    3. Lasketaan v:n Newey–West-kovarianssi (Bartlett-ydin) tavalliseen
+       tapaan.
+    4. "Uudelleenvärjätään" tulos AR(1)-rakenteen mukaisesti:
+       Ω = (I−A)⁻¹ Ω_v (I−A′)⁻¹.
+    5. Muodostetaan lopullinen sandwich-kovarianssi (X'X)⁻¹ Ω (X'X)⁻¹, ja
+       kerrotaan samalla pienen otoksen korjauksella kuin Newey–Westissä.
+
+    Toteutus on validoitu niin, että jos esivalkaisuaskel ohitetaan (A=0),
+    tulos täsmää statsmodelsin omaan ``cov_type="HAC"``-tulokseen
+    numeerisesti tarkasti.
+    """
+    x = np.asarray(ols.model.exog)
+    u = np.asarray(ols.resid)
+    xu = x * u[:, None]
+    n, k = xu.shape
+
+    xu_viive = xu[:-1]
+    xu_nyt = xu[1:]
+    # xu_t ≈ xu_{t-1} @ A  (rivivektorimuoto; pystyvektorimuodossa
+    # xu_t = A' xu_{t-1} + v_t)
+    A, *_ = np.linalg.lstsq(xu_viive, xu_nyt, rcond=None)
+    v = xu_nyt - xu_viive @ A
+
+    viiveet = newey_west_viiveet(v.shape[0], vahimmaisviive)
+    painot = _bartlett_painot(viiveet)
+    S_v = painot[0] * (v.T @ v)
+    for lag in range(1, viiveet + 1):
+        s = v[lag:].T @ v[:-lag]
+        S_v += painot[lag] * (s + s.T)
+
+    A_pysty = A.T
+    I = np.eye(k)
+    IA_inv = np.linalg.inv(I - A_pysty)
+    S_varjatty = IA_inv @ S_v @ IA_inv.T
+
+    XtX_inv = np.asarray(ols.normalized_cov_params)
+    kovarianssi = XtX_inv @ S_varjatty @ XtX_inv.T
+    kovarianssi *= n / (n - k)
+    return kovarianssi, viiveet
+
+
 @dataclass
 class RobustiTulos:
-    """OLS-malli täydennettynä HAC-keskivirheillä ja autokorrelaatio-
-    diagnostiikalla (Durbin–Watson, Breusch–Godfrey)."""
+    """OLS-malli täydennettynä kolmella keskivirhevaihtoehdolla (OLS,
+    Newey–West, Andrews–Monahan-esivalkaistu HAC) ja autokorrelaatio-
+    diagnostiikalla (Durbin–Watson, Breusch–Godfrey).
+
+    ``kasvu_sarakkeet`` on lista BKT-kasvu-selittäjistä: yhden alkion
+    lista tavallisessa mallissa, useamman alkion lista viivemallissa,
+    jolloin niiden kertoimien SUMMA tulkitaan BKT-kasvun pitkän aikavälin
+    kokonaisvaikutukseksi. ``yksikko`` kertoo, ovatko selittäjät
+    vuosimuutoksia ("v/v") vai neljännesmuutoksia ("q/q") — tätä
+    käytetään kynnyskasvun annualisointiin.
+    """
 
     nimi: str
     y_sarake: str
-    kasvu_sarake: str
+    kasvu_sarakkeet: list[str]
+    yksikko: str
     ols: sm.regression.linear_model.RegressionResultsWrapper
-    hac: sm.regression.linear_model.RegressionResultsWrapper
-    hac_viiveet: int
+    nw_cov: np.ndarray
+    nw_viiveet: int
+    pw_cov: np.ndarray
+    pw_viiveet: int
     dw: float
     bg_lm: float
     bg_lm_p: float
     bg_viiveet: int
-    paallekkaiset_muutokset: bool = True
 
     @property
     def params(self) -> pd.Series:
         return self.ols.params
+
+    @property
+    def param_nimet(self) -> list[str]:
+        return list(self.params.index)
 
     @property
     def rsquared(self) -> float:
@@ -165,8 +283,99 @@ class RobustiTulos:
     def nobs(self) -> int:
         return int(self.ols.nobs)
 
-    def kynnyskasvu(self) -> float:
-        return -self.params["const"] / self.params[self.kasvu_sarake]
+    def _kovarianssi(self, nimi: str) -> np.ndarray:
+        if nimi == "ols":
+            return np.asarray(self.ols.cov_params())
+        if nimi == "nw":
+            return self.nw_cov
+        if nimi == "pw":
+            return self.pw_cov
+        if nimi == "konservatiivinen":
+            return self.pw_cov if self.paa_nimi == "pw" else self.nw_cov
+        raise ValueError(f"Tuntematon kovarianssin nimi: {nimi!r}")
+
+    def _lineaarikombinaatio(
+        self, sarakkeet: Sequence[str], kovarianssin_nimi: str
+    ) -> tuple[float, float, float, float]:
+        """(estimaatti, keskivirhe, t-arvo, p-arvo) sarakkeiden kertoimien
+        summalle, annetulla kovarianssimatriisilla."""
+        r = np.zeros(len(self.param_nimet))
+        for sarake in sarakkeet:
+            r[self.param_nimet.index(sarake)] = 1.0
+        cov = self._kovarianssi(kovarianssin_nimi)
+        tt = self.ols.t_test(r, cov_p=cov)
+        estimaatti = _skalaariksi(tt.effect)
+        se = _skalaariksi(tt.sd)
+        t_arvo = _skalaariksi(tt.tvalue)
+        p_arvo = _skalaariksi(tt.pvalue)
+        return estimaatti, se, t_arvo, p_arvo
+
+    @property
+    def paa_nimi(self) -> str:
+        """Kumpi HAC-vaihtoehdoista (nw/pw) valitaan PÄÄTULOKSEKSI: se,
+        joka antaa suuremman (konservatiivisemman) keskivirheen BKT-kasvun
+        pitkän aikavälin vaikutukselle. Ei koskaan valita pienintä."""
+        _, nw_se, _, _ = self._lineaarikombinaatio(self.kasvu_sarakkeet, "nw")
+        _, pw_se, _, _ = self._lineaarikombinaatio(self.kasvu_sarakkeet, "pw")
+        return "pw" if pw_se >= nw_se else "nw"
+
+    @property
+    def paa_viiveet(self) -> int:
+        return self.pw_viiveet if self.paa_nimi == "pw" else self.nw_viiveet
+
+    def bse(self, kovarianssin_nimi: str) -> pd.Series:
+        cov = self._kovarianssi(kovarianssin_nimi)
+        return pd.Series(np.sqrt(np.diag(cov)), index=self.param_nimet)
+
+    def kertoimen_tilastot(
+        self, sarake: str, kovarianssin_nimi: str = "konservatiivinen"
+    ) -> tuple[float, float, float, float]:
+        """(estimaatti, keskivirhe, t-arvo, p-arvo) yhdelle yksittäiselle
+        selittäjälle (esim. vakiotermille tai covid-dummylle)."""
+        return self._lineaarikombinaatio([sarake], kovarianssin_nimi)
+
+    def pitkan_aikavalin_vaikutus(
+        self, kovarianssin_nimi: str = "konservatiivinen"
+    ) -> tuple[float, float, float, float]:
+        """(estimaatti, keskivirhe, t-arvo, p-arvo) BKT-kasvun kertoimien
+        summalle (= pitkän aikavälin kokonaisvaikutus). Yhden selittäjän
+        malleissa tämä on sama kuin kyseisen kertoimen oma tilastollinen
+        testi."""
+        return self._lineaarikombinaatio(self.kasvu_sarakkeet, kovarianssin_nimi)
+
+    def kynnyskasvu(self, kovarianssin_nimi: str = "konservatiivinen") -> float:
+        """Kynnyskasvu -a / Σb, mallin OMASSA taajuudessa (v/v tai q/q)."""
+        vaikutus, *_ = self.pitkan_aikavalin_vaikutus(kovarianssin_nimi)
+        return -self.params["const"] / vaikutus
+
+    def kynnyskasvu_vuositasolla(
+        self, kovarianssin_nimi: str = "konservatiivinen"
+    ) -> float:
+        """Kynnyskasvu annualisoituna (%/vuosi), jotta v/v- ja
+        q/q-spesifikaatiot ovat vertailukelpoisia. v/v-malleissa arvo on
+        jo vuositasoinen. q/q-malleissa neljänneskasvu annualisoidaan
+        korkoa korolle -periaatteella: g_v = (1+g_q/100)^4 - 1, koska BKT
+        kasvaisi samalla vauhdilla joka neljännes tasapainossa."""
+        g = self.kynnyskasvu(kovarianssin_nimi)
+        return annualisoi_kynnyskasvu(g, self.yksikko)
+
+    def yhteismerkitsevyys(
+        self, kovarianssin_nimi: str = "konservatiivinen"
+    ) -> tuple[float, float, int, int]:
+        """Waldin F-testi H0: kaikki kasvu_sarakkeet-kertoimet ovat
+        (yhdessä) nollia. Palauttaa (F, p, df_osoittaja, df_nimittäjä)."""
+        k = len(self.param_nimet)
+        R = np.zeros((len(self.kasvu_sarakkeet), k))
+        for i, sarake in enumerate(self.kasvu_sarakkeet):
+            R[i, self.param_nimet.index(sarake)] = 1.0
+        cov = self._kovarianssi(kovarianssin_nimi)
+        wt = self.ols.wald_test(R, cov_p=cov, use_f=True)
+        return (
+            float(wt.statistic),
+            float(wt.pvalue),
+            int(round(wt.df_num)),
+            int(round(wt.df_denom)),
+        )
 
 
 def estimoi_robusti(
@@ -174,30 +383,32 @@ def estimoi_robusti(
     y_sarake: str,
     x_sarakkeet: Sequence[str],
     nimi: str,
-    kasvu_sarake: str,
-    hac_vahimmaisviive: int = NW_VAHIMMAISVIIVE_VV,
+    kasvu_sarakkeet: Sequence[str],
+    yksikko: str = "v/v",
+    nw_vahimmaisviive: int = NW_VAHIMMAISVIIVE_VV,
+    pw_vahimmaisviive: int = PW_VAHIMMAISVIIVE,
     bg_viiveet: int | None = None,
-    paallekkaiset_muutokset: bool = True,
 ) -> RobustiTulos:
-    """Estimoi OLS:n ja täydentää sen HAC (Newey–West) -keskivirheillä sekä
+    """Estimoi OLS:n ja täydentää sen kolmella keskivirhevaihtoehdolla
+    (OLS, Newey–West, Andrews–Monahan-esivalkaistu HAC) sekä
     Durbin–Watson- ja Breusch–Godfrey-testeillä.
 
-    ``x_sarakkeet`` voi sisältää useamman selittäjän (esim. BKT-kasvun ja
-    covid-dummyn); ``kasvu_sarake`` kertoo, mikä niistä on BKT-kasvu-
-    muuttuja, jota käytetään kynnyskasvun (-a/b) laskennassa.
+    ``x_sarakkeet`` voi sisältää useamman selittäjän (esim. BKT-kasvun eri
+    viiveet ja/tai covid-dummyn); ``kasvu_sarakkeet`` kertoo, mitkä niistä
+    ovat BKT-kasvu-muuttujia, joiden kertoimien summaa käytetään pitkän
+    aikavälin vaikutuksen ja kynnyskasvun (-a/Σb) laskennassa.
     """
     y = aineisto[y_sarake]
     x = sm.add_constant(aineisto[list(x_sarakkeet)])
 
     ols = sm.OLS(y, x).fit()
-    hac_viiveet = newey_west_viiveet(int(ols.nobs), vahimmaisviive=hac_vahimmaisviive)
-    hac = sm.OLS(y, x).fit(
-        cov_type="HAC", cov_kwds={"maxlags": hac_viiveet, "use_correction": True}
-    )
+
+    nw_cov, nw_viiveet = _newey_west_kovarianssi(ols, nw_vahimmaisviive)
+    pw_cov, pw_viiveet = _andrews_monahan_kovarianssi(ols, pw_vahimmaisviive)
 
     dw = float(durbin_watson(ols.resid))
 
-    bg_L = bg_viiveet if bg_viiveet is not None else hac_viiveet
+    bg_L = bg_viiveet if bg_viiveet is not None else nw_viiveet
     with warnings.catch_warnings():
         # Vanhempi/uudempi statsmodels palauttaa joko plain tuplen tai
         # LMTestResult-nimikkeistön riippuen versiosta ja result_object-
@@ -209,77 +420,120 @@ def estimoi_robusti(
     return RobustiTulos(
         nimi=nimi,
         y_sarake=y_sarake,
-        kasvu_sarake=kasvu_sarake,
+        kasvu_sarakkeet=list(kasvu_sarakkeet),
+        yksikko=yksikko,
         ols=ols,
-        hac=hac,
-        hac_viiveet=hac_viiveet,
+        nw_cov=nw_cov,
+        nw_viiveet=nw_viiveet,
+        pw_cov=pw_cov,
+        pw_viiveet=pw_viiveet,
         dw=dw,
         bg_lm=float(bg_lm),
         bg_lm_p=float(bg_lm_p),
         bg_viiveet=bg_L,
-        paallekkaiset_muutokset=paallekkaiset_muutokset,
     )
+
+
+_KOVARIANSSI_NIMET = {"ols": "OLS", "nw": "Newey–West", "pw": "Andrews–Monahan (esivalk.)"}
 
 
 def tulosta_hac_diagnostiikka(tulos: RobustiTulos) -> None:
-    """Tulostaa HAC (Newey–West) -keskivirheet sekä DW- ja BG-testit
-    alkuperäisen (tavallisen OLS:n) rinnalle."""
+    """Tulostaa OLS-, Newey–West- ja Andrews–Monahan-keskivirheet
+    rinnakkain, kertoo kumpi HAC-vaihtoehdoista on valittu konservatiivi-
+    seksi päätulokseksi, sekä DW-, BG- ja kynnyskasvutiedot."""
     print()
-    print("-" * 70)
+    print("-" * 78)
     print(f"Robustisuus: {tulos.nimi}")
-    syy = (
-        "korjaa autokorrelaation, joka syntyy päällekkäisistä vuosimuutoksista"
-        if tulos.paallekkaiset_muutokset
-        else "varmistaa keskivirheet myös jäljelle jäävän jäännösautokorrelaation varalta"
-    )
-    print(f"HAC (Newey–West) -keskivirheet, viiveitä L={tulos.hac_viiveet} ({syy})")
-    print("-" * 70)
-    print(f"{'Termi':<15}{'Kerroin':>12}{'OLS-SE':>12}{'HAC-SE':>12}{'HAC t':>10}{'HAC p':>10}")
-    for termi in tulos.params.index:
-        print(
-            f"{termi:<15}{tulos.params[termi]:>12.4f}"
-            f"{tulos.ols.bse[termi]:>12.4f}"
-            f"{tulos.hac.bse[termi]:>12.4f}"
-            f"{tulos.hac.tvalues[termi]:>10.3f}"
-            f"{tulos.hac.pvalues[termi]:>10.4f}"
-        )
-    print("-" * 70)
     print(
-        f"Durbin–Watson:             {tulos.dw:.3f}  "
+        f"Keskivirheet: OLS vs. Newey–West (L={tulos.nw_viiveet}) vs. "
+        f"Andrews–Monahan-esivalkaistu HAC (L={tulos.pw_viiveet} "
+        "esivalkaisun jälkeen)"
+    )
+    print("-" * 78)
+    print(
+        f"{'Termi':<15}{'Kerroin':>11}{'OLS-SE':>11}{'NW-SE':>11}{'AM-SE':>11}"
+    )
+    ols_bse = tulos.bse("ols")
+    nw_bse = tulos.bse("nw")
+    pw_bse = tulos.bse("pw")
+    for termi in tulos.param_nimet:
+        print(
+            f"{termi:<15}{tulos.params[termi]:>11.4f}"
+            f"{ols_bse[termi]:>11.4f}"
+            f"{nw_bse[termi]:>11.4f}"
+            f"{pw_bse[termi]:>11.4f}"
+        )
+    print("-" * 78)
+    print(
+        f"Päätulokseksi valittu (konservatiivisin): "
+        f"{_KOVARIANSSI_NIMET[tulos.paa_nimi]} "
+        "— pienessä otoksessa HAC-keskivirheet ovat tunnetusti alaspäin "
+        "harhaisia, joten päätuloksena käytetään suurempaa SE:tä, ei "
+        "kummankaan menetelmän pienintä arvoa."
+    )
+    print(
+        f"Durbin–Watson:              {tulos.dw:.3f}  "
         "(2.0 = ei autokorrelaatiota; <2 viittaa positiiviseen)"
     )
     print(
-        f"Breusch–Godfrey (L={tulos.bg_viiveet}):  LM={tulos.bg_lm:.3f}, "
+        f"Breusch–Godfrey (L={tulos.bg_viiveet}):   LM={tulos.bg_lm:.3f}, "
         f"p={tulos.bg_lm_p:.4f}  "
         "(H0: ei jäljellä olevaa autokorrelaatiota jäännöksissä)"
     )
-    print(f"Kynnyskasvu -a/b:          {tulos.kynnyskasvu():.3f} %")
+
+    if len(tulos.kasvu_sarakkeet) > 1:
+        vaikutus, se, t_arvo, p_arvo = tulos.pitkan_aikavalin_vaikutus("konservatiivinen")
+        print(
+            f"BKT-kasvun pitkän aikavälin vaikutus (Σb, {len(tulos.kasvu_sarakkeet)} "
+            f"viivettä, {_KOVARIANSSI_NIMET[tulos.paa_nimi]}-SE):"
+        )
+        print(f"  Σb = {vaikutus:.4f}  SE = {se:.4f}  t = {t_arvo:.3f}  p = {p_arvo:.4f}")
+        f_arvo, p_yhdessa, df1, df2 = tulos.yhteismerkitsevyys("konservatiivinen")
+        print(
+            f"Viiveiden yhteismerkitsevyys (Wald F, H0: kaikki BKT-viiveiden "
+            f"kertoimet = 0): F({df1},{df2}) = {f_arvo:.3f}, p = {p_yhdessa:.4f}"
+        )
+
+    kynnys = tulos.kynnyskasvu("konservatiivinen")
+    kynnys_v = tulos.kynnyskasvu_vuositasolla("konservatiivinen")
+    if tulos.yksikko == "q/q":
+        print(
+            f"Kynnyskasvu -a/Σb:          {kynnys:.3f} % / neljännes "
+            f"→ annualisoituna {kynnys_v:.3f} % / vuosi"
+        )
+    else:
+        print(f"Kynnyskasvu -a/Σb:          {kynnys_v:.3f} % / vuosi")
 
 
 def tulosta_kolmen_otoksen_taulukko(tulokset: Sequence[RobustiTulos]) -> None:
-    """Tulostaa rinnakkaisvertailun (kertoimet, HAC-keskivirheet, R²,
-    kynnyskasvu) kolmesta (tai useammasta) mallista yhtenä taulukkona."""
+    """Tulostaa rinnakkaisvertailun (kertoimet, konservatiivisimman
+    HAC-vaihtoehdon keskivirheet, R², vuositasoinen kynnyskasvu) kolmesta
+    (tai useammasta) mallista yhtenä taulukkona."""
     print()
-    print("=" * 100)
+    print("=" * 106)
     print("Otosvertailu: koko aineisto / ilman 2020–2021 / covid-dummy mukana")
-    print("(keskivirheet ovat HAC/Newey–West-keskivirheitä, suluissa)")
-    print("=" * 100)
+    print(
+        "(keskivirheet ovat kunkin mallin konservatiivisimman HAC-vaihtoehdon "
+        "mukaisia, suluissa — ks. yllä; -a/Σb on vuositasoinen)"
+    )
+    print("=" * 106)
     otsikko = (
         f"{'Malli':<32}{'Vakio a':>13}{'BKT-kerroin b':>16}"
-        f"{'Covid-dummy':>14}{'R²':>8}{'N':>6}{'-a/b (%)':>11}"
+        f"{'Covid-dummy':>14}{'R²':>8}{'N':>6}{'-a/b, %/v':>12}"
     )
     print(otsikko)
-    print("-" * 100)
+    print("-" * 106)
     for t in tulokset:
         a = t.params["const"]
-        a_se = t.hac.bse["const"]
-        b = t.params[t.kasvu_sarake]
-        b_se = t.hac.bse[t.kasvu_sarake]
+        _, a_se, _, _ = t.kertoimen_tilastot("const")
+        b_sarake = t.kasvu_sarakkeet[0]
+        b = t.params[b_sarake]
+        _, b_se, _, _ = t.kertoimen_tilastot(b_sarake)
         a_str = f"{a:.3f} ({a_se:.3f})"
         b_str = f"{b:.3f} ({b_se:.3f})"
-        if "covid" in t.params.index:
+        if "covid" in t.param_nimet:
             c = t.params["covid"]
-            c_se = t.hac.bse["covid"]
+            _, c_se, _, _ = t.kertoimen_tilastot("covid")
             covid_str = f"{c:.3f} ({c_se:.3f})"
         else:
             covid_str = "–"
@@ -290,10 +544,33 @@ def tulosta_kolmen_otoksen_taulukko(tulokset: Sequence[RobustiTulos]) -> None:
             f"{covid_str:>14}"
             f"{t.rsquared:>8.4f}"
             f"{t.nobs:>6}"
-            f"{t.kynnyskasvu():>11.3f}"
+            f"{t.kynnyskasvu_vuositasolla('konservatiivinen'):>12.3f}"
         )
         print(rivi)
-    print("=" * 100)
+    print("=" * 106)
+
+
+def tulosta_kynnyskasvu_yhteenveto(
+    tulokset: Sequence[tuple[str, float, str]],
+) -> None:
+    """Tulostaa kaikkien spesifikaatioiden kynnyskasvun samassa,
+    annualisoidussa yksikössä (%/vuosi), merkiten selvästi kunkin
+    spesifikaation alkuperäisen taajuuden (v/v tai q/q).
+
+    ``tulokset`` on lista (nimi, kynnyskasvu_omassa_yksikössä, yksikkö)
+    -kolmikoita — näin sama funktio kelpaa niin ``RobustiTulos``-
+    olioille (``t.kynnyskasvu()``, ``t.yksikko``) kuin alkuperäisen,
+    ei-robustin OLS-spesifikaation tulokselle.
+    """
+    print()
+    print("=" * 78)
+    print("Kynnyskasvu -a/Σb kaikissa spesifikaatioissa, annualisoituna")
+    print("(BKT:n kasvuvauhti, %/vuosi, jolla työttömyysaste ei muutu)")
+    print("=" * 78)
+    for nimi, kynnys_oma, yksikko in tulokset:
+        kynnys_v = annualisoi_kynnyskasvu(kynnys_oma, yksikko)
+        print(f"  {nimi:<44}{kynnys_v:>9.3f} %/v   (alkup. yksikkö: {yksikko})")
+    print("=" * 78)
 
 
 def piirra_aikasarjat(aineisto: pd.DataFrame, tiedostopolku: str) -> None:

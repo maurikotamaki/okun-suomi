@@ -256,8 +256,9 @@ def hae_tyottomyysaste_kausitasoitettu_kk() -> pd.Series:
     return _poimi_aikasarja(data, "tyottomyysaste_kausi_kk")
 
 
-def hae_ja_yhdista_qoq() -> pd.DataFrame:
-    """Muodostaa vaihtoehtoisen, neljännesmuutoksiin perustuvan aineiston.
+def hae_ja_yhdista_qoq(maksimiviive: int = 4) -> pd.DataFrame:
+    """Muodostaa vaihtoehtoisen, neljännesmuutoksiin perustuvan aineiston,
+    mukaan lukien BKT-kasvun viiveet 0..``maksimiviive`` neljännestä.
 
     BKT-sarja on jo valmiiksi kausitasoitettu ja ilmaistu edellisneljänneksen
     muutoksena. Työttömyysaste on saatavilla kausitasoitettuna vain
@@ -265,10 +266,21 @@ def hae_ja_yhdista_qoq() -> pd.DataFrame:
     (vaatii kaikki kolme kuukautta samalta neljännekseltä) ja muutetaan
     sitten neljännesmuutokseksi (u_t - u_{t-1}, prosenttiyksikköä).
 
-    Palauttaa DataFramen sarakkeilla ``bkt_kasvu_qoq`` ja
+    BKT:n viiveet lasketaan täydestä, vuodesta 1990 alkavasta
+    BKT-sarjasta ennen työttömyysaineistoon yhdistämistä, jotta viiveiden
+    lisääminen ei turhaan lyhennä lopullista otosta (viiveille riittää
+    historiaa jo ennen työttömyysaineiston alkua v. 2010).
+
+    Palauttaa DataFramen sarakkeilla ``bkt_kasvu_qoq_L0`` (kontemporaani-
+    nen) ... ``bkt_kasvu_qoq_L{maksimiviive}`` sekä
     ``tyottomyysasteen_muutos_qoq``.
     """
     bkt_qoq = hae_bkt_kasvu_qoq()
+    viiveet = {
+        f"bkt_kasvu_qoq_L{i}": bkt_qoq.shift(i) for i in range(maksimiviive + 1)
+    }
+    bkt_viiveet = pd.DataFrame(viiveet)
+
     tyottomyys_kk = hae_tyottomyysaste_kausitasoitettu_kk()
 
     kuukausiryhma = tyottomyys_kk.resample("Q")
@@ -280,7 +292,8 @@ def hae_ja_yhdista_qoq() -> pd.DataFrame:
         "tyottomyysasteen_muutos_qoq"
     )
 
-    df = pd.concat([bkt_qoq, tyottomyys_q, tyottomyys_muutos_qoq], axis=1)
+    df = pd.concat([bkt_viiveet, tyottomyys_q, tyottomyys_muutos_qoq], axis=1)
     df = df.sort_index()
-    df = df.dropna(subset=["bkt_kasvu_qoq", "tyottomyysasteen_muutos_qoq"])
+    vaaditut_sarakkeet = list(viiveet.keys()) + ["tyottomyysasteen_muutos_qoq"]
+    df = df.dropna(subset=vaaditut_sarakkeet)
     return df

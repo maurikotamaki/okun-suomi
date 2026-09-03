@@ -100,9 +100,10 @@ Skripti tulostaa:
 1. mitä dataa rajapinnasta haettiin (havaintomäärät, aikaväli, näyte),
 2. OLS-regressiotulokset alkuperäiselle spesifikaatiolle (kertoimet,
    keskivirheet, t- ja p-arvot, R², kynnyskasvu),
-3. robustisuustarkastelun: HAC-keskivirheet ja autokorrelaatiodiagnostiikka,
-   otosvertailutaulukon ja vaihtoehtoisen neljännesmuutos-spesifikaation
-   (ks. alla "Robustisuustarkastelu"),
+3. robustisuustarkastelun: OLS/Newey–West/Andrews–Monahan-keskivirheet ja
+   autokorrelaatiodiagnostiikka, otosvertailutaulukon, vaihtoehtoisen
+   viivemuotoisen neljännesmuutos-spesifikaation, sekä annualisoidun
+   kynnyskasvuyhteenvedon (ks. alla "Robustisuustarkastelu"),
 
 ja tallentaa hakemistoon `kuvat/`:
 - `aikasarjat.png` — BKT:n kasvu ja työttömyysasteen muutos samassa
@@ -136,108 +137,157 @@ Alkuperäistä spesifikaatiota ei ole poistettu — `okun_suomi/analyysi.py`
 sisältää edelleen `estimoi_okunin_laki`/`tulosta_tulokset` ennallaan,
 ja `main.py` ajaa alla kuvatut tarkastelut sen **rinnalla**.
 
-### 1. HAC (Newey–West) -keskivirheet, Durbin–Watson, Breusch–Godfrey
+### 1. Kolme keskivirhevaihtoehtoa: OLS, Newey–West, Andrews–Monahan
 
 Peräkkäiset vuosimuutokset (`u_t - u_{t-4}` neljänneksiltä t ja t-1)
 jakavat kolme neljästä termistään, mikä synnyttää mekaanisesti MA(3)-
 tyyppisen autokorrelaation jäännöksiin. Tavalliset OLS-keskivirheet eivät
-ota tätä huomioon, joten niiden rinnalle lasketaan Newey–West-keskivirheet
-(viiveitä vähintään 4, nyrkkisääntönä `floor(4·(T/100)^(2/9))`), sekä
-Durbin–Watson- ja Breusch–Godfrey-testit tavallisen OLS:n jäännöksille:
+ota tätä huomioon, joten jokaiselle mallille lasketaan **kolme**
+vaihtoehtoista keskivirhettä rinnakkain:
+
+- **OLS** — klassinen, ei-robusti.
+- **Newey–West (HAC)** — Bartlett-ydin, viiveitä vähintään 4 (nyrkki-
+  sääntönä `floor(4·(T/100)^(2/9))`, ks. `estimoi_robusti`).
+- **Andrews–Monahan (1992) esivalkaistu HAC** — pisteprosessi `x_t·u_t`
+  esivalkaistaan ensin VAR(1)-mallilla, sen jäännösten Newey–West-
+  kovarianssi lasketaan, ja tulos "uudelleenvärjätään" AR(1)-rakenteen
+  mukaisesti (`(I-A)⁻¹ Ω_v (I-A')⁻¹`). Statsmodels ei tarjoa tätä
+  valmiina, joten se on toteutettu manuaalisesti `analyysi.py`:ssä
+  (`_andrews_monahan_kovarianssi`) ja validoitu niin, että esivalkaisu-
+  askeleen ohittaminen (A=0) toistaa statsmodelsin oman
+  `cov_type="HAC"`-tuloksen numeerisesti tarkasti.
+
+Otos on pieni (58–66 havaintoa), ja HAC-tyyppiset estimaattorit ovat
+tunnetusti **harhaisia alaspäin pienessä otoksessa** (Andrews 1991) —
+molemmat voivat siis aliarvioida todellisen epävarmuuden. Siksi
+**päätuloksena käytetään aina sitä kahdesta HAC-vaihtoehdosta (Newey–West
+tai Andrews–Monahan), joka antaa suuremman (konservatiivisemman)
+keskivirheen** BKT-kasvun kokonaisvaikutukselle — ei koskaan pienintä
+saatavilla olevaa lukua. Kumpi valitaan, vaihtelee mallista toiseen ja
+raportoidaan joka kerta näkyvästi.
 
 ```
-Termi               Kerroin      OLS-SE      HAC-SE     HAC t     HAC p
-const                0.2397      0.1103      0.1817     1.319    0.1871
-bkt_kasvu           -0.1469      0.0471      0.0222    -6.612    0.0000
-----------------------------------------------------------------------
-Durbin–Watson:             0.466  (2.0 = ei autokorrelaatiota; <2 viittaa positiiviseen)
-Breusch–Godfrey (L=4):  LM=39.130, p=0.0000  (H0: ei jäljellä olevaa autokorrelaatiota)
+Termi              Kerroin     OLS-SE      NW-SE      AM-SE
+const               0.2397     0.1103     0.1817     0.2830
+bkt_kasvu          -0.1469     0.0471     0.0222     0.0270
+--------------------------------------------------------------
+Päätulokseksi valittu (konservatiivisin): Andrews–Monahan (esivalk.)
+Durbin–Watson:              0.466  (<2 → positiivinen autokorrelaatio)
+Breusch–Godfrey (L=4):   LM=39.130, p=0.0000
+Kynnyskasvu -a/Σb:          1.632 % / vuosi
 ```
 
 Durbin–Watson (0.47) ja Breusch–Godfrey (p≈0) vahvistavat odotetun,
 voimakkaan positiivisen autokorrelaation — päällekkäiset vuosimuutokset
-eivät siis ole tilastollisesti harmittomia, ja tavallisten OLS-
-keskivirheiden sijaan pitäisi tukeutua HAC-versioon.
-
-Huomionarvoista: vakiotermin HAC-keskivirhe on suurempi kuin OLS-
-keskivirhe (odotetusti, positiivisen autokorrelaation vuoksi), mutta
-BKT-kertoimen HAC-keskivirhe on pienempi kuin OLS-keskivirhe. Tämä ei ole
-virhe — se johtuu siitä, että HAC korjaa selittäjän ja jäännöksen
-**yhteisautokovarianssia** (score-prosessia `x_t·e_t`), ei pelkästään
-jäännöksen omaa autokorrelaatiota, ja koska myös BKT-kasvu itse on
-vahvasti autokorreloitunut (vuosimuutos), tulos voi mennä kumpaankin
-suuntaan. Tulos on vakaa eri viivemäärillä (L=1…10 antaa BKT-kertoimen
-HAC-keskivirheeksi 0.021–0.033), joten kyse ei ole L=4:n sattumasta.
+eivät siis ole tilastollisesti harmittomia. Tässä mallissa
+Andrews–Monahan (0.0270) on suurempi kuin Newey–West (0.0222) BKT-
+kertoimelle, joten se valitaan päätulokseksi; vakiotermille molemmat
+HAC-vaihtoehdot ovat suurempia kuin OLS, kuten positiivisen
+autokorrelaation vallitessa on odotettavaa.
 
 ### 2. Otosvertailu: koko aineisto / ilman 2020–2021 / covid-dummy
 
-Sama v/v-spesifikaatio kolmella otoksella, keskivirheet HAC:
+Sama v/v-spesifikaatio kolmella otoksella, keskivirheet kunkin mallin
+konservatiivisimman HAC-vaihtoehdon mukaisia:
 
 ```
-Malli                                 Vakio a   BKT-kerroin b   Covid-dummy      R²     N   -a/b (%)
-----------------------------------------------------------------------------------------------------
-Koko aineisto (v/v)             0.240 (0.182)  -0.147 (0.022)             –  0.1318    66      1.632
-Ilman 2020–2021                 0.206 (0.205)  -0.143 (0.032)             –  0.0881    58      1.445
-Covid-dummy mukana              0.206 (0.202)  -0.142 (0.026) 0.248 (0.308)  0.1400    66      1.446
+Malli                                 Vakio a   BKT-kerroin b   Covid-dummy      R²     N   -a/b, %/v
+------------------------------------------------------------------------------------------------------
+Koko aineisto (v/v)             0.240 (0.283)  -0.147 (0.027)             –  0.1318    66       1.632
+Ilman 2020–2021                 0.206 (0.296)  -0.143 (0.040)             –  0.0881    58       1.445
+Covid-dummy mukana              0.206 (0.313)  -0.142 (0.029) 0.248 (0.423)  0.1400    66       1.446
 ```
 
 Johtopäätös: koronavuodet eivät ajaa tulosta. BKT-kerroin pysyy lähes
 muuttumattomana (-0.147 → -0.143/-0.142) riippumatta siitä, poistetaanko
-2020–2021 kokonaan vai kontrolloidaanko niiden vaikutus dummy-muuttujalla.
-Covid-dummyn oma kerroin (0.248) ei ole tilastollisesti merkitsevä
-(HAC-keskivirhe 0.308) — koronashokki näkyy siis pääasiassa suurina
-BKT- ja työttömyysheilahteluina, ei systemaattisena tasosiirtymänä sen
+2020–2021 kokonaan vai kontrolloidaanko niiden vaikutus dummy-muuttujalla,
+ja pysyy tilastollisesti merkitsevänä myös konservatiivisimmilla
+keskivirheillä. Covid-dummyn oma kerroin (0.248) ei ole tilastollisesti
+merkitsevä (SE 0.423) — koronashokki näkyy siis pääasiassa suurina BKT-
+ja työttömyysheilahteluina, ei systemaattisena tasosiirtymänä sen
 jälkeen, kun BKT:n vaikutus on jo kontrolloitu.
 
-### 3. Vaihtoehtoinen spesifikaatio: neljännesmuutokset (q/q)
+### 3. Vaihtoehtoinen spesifikaatio: neljännesmuutokset viiveillä (q/q)
 
 Vuosimuutosten sijaan malli estimoidaan myös kausitasoitetuilla
-**neljännesmuutoksilla**: BKT:n kausitasoitettu volyymin muutos
-edellisneljänneksestä (`StatFin/ntp/132h.px`, sisältökoodi
-`vol_kk_kausitvv2015`) selittäjänä ja kausitasoitetun työttömyysasteen
-neljännesmuutos selitettävänä. Kausitasoitettu työttömyysaste on
-saatavilla vain kuukausitasolla (`StatFin/tyti/135z.px`, "kausitasoitettu
-sarja"), joten se aggregoidaan neljännesvuosikeskiarvoiksi ennen
-erotuksen laskemista.
+**neljännesmuutoksilla**, ja BKT-kasvu sisällytetään **viiveillä 0–4
+neljännestä** (jakautunut viivemalli, distributed lag):
 
 ```
-Termi               Kerroin      OLS-SE      HAC-SE     HAC t     HAC p
-const                0.0438      0.0476      0.0542     0.808    0.4194
-bkt_kasvu_qoq       -0.0830      0.0372      0.0320    -2.596    0.0094
-----------------------------------------------------------------------
-Durbin–Watson:             1.928  (2.0 = ei autokorrelaatiota)
-Breusch–Godfrey (L=3):  LM=4.362, p=0.2249  (ei viitettä jäännösautokorrelaatiosta)
+Δtyöttömyysaste_t = a + Σ_{i=0}^{4} b_i · BKT_kasvu_{t-i} + e_t
 ```
 
-Kerroin on edelleen negatiivinen ja tilastollisesti merkitsevä (p≈0.01),
-mutta itseisarvoltaan pienempi kuin v/v-spesifikaatiossa — odotettua,
-koska yhden neljänneksen BKT-shokki ehtii vaikuttaa työttömyyteen vasta
-osittain saman neljänneksen aikana. Durbin–Watson (1.93) ja
-Breusch–Godfrey (p=0.22) osoittavat, ettei jäännöksissä ole enää
-merkittävää autokorrelaatiota — tämä vahvistaa, että v/v-spesifikaation
-voimakas autokorrelaatio (DW=0.47) johtuu nimenomaan vuosimuutosten
-päällekkäisyydestä eikä esimerkiksi puuttuvista selittäjistä.
+BKT: kausitasoitettu volyymin muutos edellisneljänneksestä
+(`StatFin/ntp/132h.px`, sisältökoodi `vol_kk_kausitvv2015`). Työttömyys:
+kausitasoitettu työttömyysaste on saatavilla vain kuukausitasolla
+(`StatFin/tyti/135z.px`, "kausitasoitettu sarja"), joten se aggregoidaan
+neljännesvuosikeskiarvoiksi ennen erotuksen laskemista. BKT:n viiveet
+lasketaan täydestä, vuodesta 1990 alkavasta sarjasta, joten viiveiden
+lisääminen ei lyhennä otosta — se pysyy samana 65 neljänneksenä kuin
+pelkällä kontemporaanisella kertoimella.
 
-### 4. Kynnyskasvu (-a/b) kaikissa spesifikaatioissa
+```
+Termi              Kerroin     OLS-SE      NW-SE      AM-SE
+const               0.1066     0.0474     0.0451     0.0415
+bkt_kasvu_qoq_L0    -0.1100     0.0359     0.0322     0.0312
+bkt_kasvu_qoq_L1    -0.0905     0.0367     0.0353     0.0381
+bkt_kasvu_qoq_L2    -0.0747     0.0362     0.0244     0.0243
+bkt_kasvu_qoq_L3    -0.0222     0.0367     0.0217     0.0218
+bkt_kasvu_qoq_L4    -0.0805     0.0357     0.0240     0.0225
+--------------------------------------------------------------
+Päätulokseksi valittu (konservatiivisin): Andrews–Monahan (esivalk.)
+Durbin–Watson:              2.115  (≈2 → ei havaittavaa autokorrelaatiota)
+Breusch–Godfrey (L=3):   LM=3.999, p=0.2616
+BKT-kasvun pitkän aikavälin vaikutus (Σb, 5 viivettä, AM-SE):
+  Σb = -0.3779  SE = 0.0787  t = -4.803  p = 0.0000
+Viiveiden yhteismerkitsevyys (Wald F, H0: kaikki BKT-viiveiden kertoimet = 0):
+  F(5,59) = 9.762, p = 0.0000
+Kynnyskasvu -a/Σb:          0.282 % / neljännes → annualisoituna 1.133 % / vuosi
+```
 
-BKT:n kasvuvauhti, jolla työttömyysaste ei (mallin pistesuureiden mukaan)
-muutu:
+Durbin–Watson (2.12) ja Breusch–Godfrey (p=0.26) osoittavat, ettei
+jäännöksissä ole enää merkittävää autokorrelaatiota — tämä vahvistaa,
+että v/v-spesifikaation voimakas autokorrelaatio (DW=0.47) johtuu
+nimenomaan vuosimuutosten päällekkäisyydestä eikä esimerkiksi
+puuttuvista selittäjistä tai virheellisestä dynamiikasta. Viiveiden
+**yhteismerkitsevyys** on erittäin vahva (F(5,59)=9.8, p<0.0001): BKT-
+kasvu 0–4 neljänneksen viiveellä selittää työttömyysasteen muutosta
+selvästi, vaikka yksittäiset viivekertoimet eivät kaikki erikseen ole
+tilastollisesti merkitseviä (esim. L3). Siksi **pitkän aikavälin
+vaikutuksena ja kynnyskasvun laskentaperusteena käytetään kertoimien
+summaa (Σb = -0.378), ei pelkkää kontemporaanista kerrointa (b₀ = -0.110)**
+— pelkkä kontemporaaninen kerroin aliarvioisi BKT-shokin
+kokonaisvaikutuksen, koska suuri osa siitä realisoituu vasta
+myöhemmillä neljänneksillä.
 
-| Spesifikaatio | Kynnyskasvu, % |
-|---|---|
-| Alkuperäinen / koko aineisto (v/v) | 1.63 |
-| Ilman 2020–2021 (v/v) | 1.45 |
-| Covid-dummy, ei-covid-tila (v/v) | 1.45 |
-| Neljännesmuutokset (q/q) | 0.53 |
+### 4. Kynnyskasvu (-a/Σb) kaikissa spesifikaatioissa, annualisoituna
 
-V/v-spesifikaatioiden kynnyskasvu (~1.4–1.6 %) on yhdenmukainen ja
-lähellä Suomen pitkän aikavälin trendikasvua. Q/q-spesifikaation
-matalampi kynnyskasvu (0.53 %) on odotettu seuraus siitä, että yhden
-neljänneksen kerroin on itsessään pienempi (osa BKT-shokin vaikutuksesta
-työttömyyteen realisoituu vasta myöhemmillä neljänneksillä, jotka v/v-
-spesifikaatiossa ovat implisiittisesti mukana neljän neljänneksen
-ikkunassa). Lukuja ei pidä tulkita tarkkoina ennusteina — kyse on
-pistesuureista ilman epävarmuusväliä.
+Jotta v/v- ja q/q-spesifikaatiot ovat suoraan vertailukelpoisia, kaikki
+kynnyskasvut on annualisoitu (%/vuosi). V/v-mallit ovat jo valmiiksi
+vuositasoisia sellaisenaan; q/q-mallin neljänneskohtainen kynnys
+annualisoidaan korkoa korolle -periaatteella,
+`g_vuosi = (1 + g_neljännes/100)^4 - 1` (BKT kasvaisi samalla vauhdilla
+joka neljännes tasapainossa) — **ei** kertomalla neljällä, koska
+kasvuprosentit eivät summaudu suoraan yli useamman jakson.
+
+| Spesifikaatio | Yksikkö | Kynnyskasvu omassa yksikössä | Annualisoitu, %/vuosi |
+|---|---|---|---|
+| Alkuperäinen (v/v, OLS, ei-robusti) | v/v | 1.632 %/v | 1.632 |
+| Koko aineisto (v/v, konservatiivinen HAC) | v/v | 1.632 %/v | 1.632 |
+| Ilman 2020–2021 (v/v, konservatiivinen HAC) | v/v | 1.445 %/v | 1.445 |
+| Covid-dummy, ei-covid-tila (v/v, konservatiivinen HAC) | v/v | 1.446 %/v | 1.446 |
+| Neljännesmuutokset, Σb viiveille 0–4 (q/q, konservatiivinen HAC) | q/q | 0.282 %/neljännes | **1.133** |
+
+V/v-spesifikaatioiden kynnyskasvu (~1.4–1.6 %/v) ja q/q-spesifikaation
+Σb-pohjainen, annualisoitu kynnyskasvu (~1.1 %/v) ovat nyt samaa
+suuruusluokkaa ja molemmat lähellä Suomen pitkän aikavälin
+trendikasvua — toisin kuin aiemmassa versiossa, jossa q/q-mallin pelkkään
+kontemporaaniseen kertoimeen perustuva, ei-annualisoitu kynnys (0.53 %)
+näytti harhaanjohtavan paljon pienemmältä kuin v/v-luvut, vaikka kyse oli
+vain yksikkö- ja spesifikaatioerosta eikä todellisesta ristiriidasta.
+Lukuja ei silti pidä tulkita tarkkoina ennusteina — kyse on pistesuureista
+epälineaarisen muunnoksen (annualisoinnin) läpi, eikä niille ole
+laskettu erillistä epävarmuusväliä.
 
 **Huom:** koska data haetaan rajapinnasta joka ajokerralla ja
 Tilastokeskus päivittää sekä uusimpia neljänneksiä että joskus
