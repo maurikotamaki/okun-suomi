@@ -124,6 +124,23 @@ def main() -> int:
         "varten (kausitasoitettu BKT: StatFin/ntp/132h.px, kausitasoitettu "
         "työttömyysaste: StatFin/tyti/135z.px), BKT-kasvun viiveillä 0-4 ..."
     )
+
+    # Varmistetaan PxWeb-metatiedoista (ajonaikaisesti, ei vain koodin
+    # nimen perusteella), että molemmat q/q-sarjat ovat todella
+    # kausitasoitettuja, ja tulostetaan mikä sarja valittiin kummallekin
+    # muuttujalle.
+    try:
+        kausitasoitus = datahaku.varmista_qoq_kausitasoitus()
+    except RuntimeError as exc:
+        print(f"VIRHE: kausitasoituksen varmistus epäonnistui: {exc}", file=sys.stderr)
+        return 1
+    print("Kausitasoituksen varmistus PxWeb-metatiedoista:")
+    for nimi, (taulukko, koodi, selite) in kausitasoitus.items():
+        print(f"  {nimi}:")
+        print(f"    taulukko: {taulukko}")
+        print(f"    sisältökoodi: {koodi!r}")
+        print(f"    PxWeb-selite: {selite!r}")
+
     VIIVEET_QOQ = 4
     try:
         aineisto_qoq = datahaku.hae_ja_yhdista_qoq(maksimiviive=VIIVEET_QOQ)
@@ -152,6 +169,15 @@ def main() -> int:
         nw_vahimmaisviive=analyysi.NW_VAHIMMAISVIIVE_QOQ,
     )
     analyysi.tulosta_hac_diagnostiikka(qoq)
+
+    # 3b) Jäännösten kausivaihtelutesti viivemallille: jos kausitasoitus
+    #     ei ole täydellinen, kausidummyt (Q2-Q4 vs. Q1) näkyisivät
+    #     merkitsevinä jäännöksissä — mahdollinen selitys sille, että
+    #     yksittäiset viivekertoimet (esim. L4) poikkeavat naapureistaan.
+    kausivaihtelutesti = analyysi.testaa_jaannosten_kausivaihtelu(qoq)
+    analyysi.tulosta_kausivaihtelutesti(
+        kausivaihtelutesti, nimi=f"Neljännesmuutokset, viiveet 0-{VIIVEET_QOQ} (q/q)"
+    )
 
     # 4) Kynnyskasvun yhteenveto kaikista spesifikaatioista, annualisoituna
     #    samaan (%/vuosi) yksikköön, jotta v/v- ja q/q-mallit ovat suoraan

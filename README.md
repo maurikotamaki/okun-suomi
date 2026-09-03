@@ -226,6 +226,19 @@ lasketaan täydestä, vuodesta 1990 alkavasta sarjasta, joten viiveiden
 lisääminen ei lyhennä otosta — se pysyy samana 65 neljänneksenä kuin
 pelkällä kontemporaanisella kertoimella.
 
+**Kausitasoituksen varmistus PxWeb-metatiedoista.** Koska molemmat
+q/q-sarjat ovat oleellisia sille, ettei jäljelle jää kausivaihtelua,
+`main.py` hakee ajonaikaisesti (`datahaku.varmista_qoq_kausitasoitus`,
+GET-pyyntö taulukon metatietoihin — ei pelkkä oletus koodin nimen
+perusteella) kummankin sisältökoodin virallisen PxWeb-selitetekstin ja
+tarkistaa, että sana "kausitasoi-" esiintyy siinä; muussa tapauksessa
+ajo keskeytyy virheeseen. Molemmat vahvistuivat:
+
+| Muuttuja | Taulukko | Sisältökoodi | PxWeb-selite |
+|---|---|---|---|
+| BKT:n q/q-kasvu | `StatFin/ntp/132h.px` | `vol_kk_kausitvv2015` | "Kausitasoitetun ja työpäiväkorjatun sarjan volyymin muutos edellisneljänneksestä, %" |
+| Työttömyysasteen taso (josta q/q lasketaan) | `StatFin/tyti/135z.px` | `Tyottaste_kausi` | "Työttömyysaste, %, kausitasoitettu sarja" |
+
 ```
 Termi              Kerroin     OLS-SE      NW-SE      AM-SE
 const               0.1066     0.0474     0.0451     0.0415
@@ -235,6 +248,7 @@ bkt_kasvu_qoq_L2    -0.0747     0.0362     0.0244     0.0243
 bkt_kasvu_qoq_L3    -0.0222     0.0367     0.0217     0.0218
 bkt_kasvu_qoq_L4    -0.0805     0.0357     0.0240     0.0225
 --------------------------------------------------------------
+N = 65   selittäjiä vakio mukaan lukien k = 6   vapausasteet (df_resid = N-k) = 59
 Päätulokseksi valittu (konservatiivisin): Andrews–Monahan (esivalk.)
 Durbin–Watson:              2.115  (≈2 → ei havaittavaa autokorrelaatiota)
 Breusch–Godfrey (L=3):   LM=3.999, p=0.2616
@@ -259,6 +273,38 @@ summaa (Σb = -0.378), ei pelkkää kontemporaanista kerrointa (b₀ = -0.110)**
 — pelkkä kontemporaaninen kerroin aliarvioisi BKT-shokin
 kokonaisvaikutuksen, koska suuri osa siitä realisoituu vasta
 myöhemmillä neljänneksillä.
+
+**Jäännösten kausivaihtelutesti.** Viivekerroin L4 (-0.081) on selvästi
+suurempi itseisarvoltaan kuin L3 (-0.022), mikä herättää epäilyn
+jäljellä olevasta kausivaihtelusta siitä huolimatta, että molemmat
+syöttösarjat on todettu kausitasoitetuiksi (ks. yllä). Tätä testataan
+suoraan `analyysi.testaa_jaannosten_kausivaihtelu`-funktiolla: viivemallin
+OLS-jäännökset regressoidaan neljännesdummyilla (Q2, Q3, Q4; Q1
+referenssinä), ja dummyjen yhteismerkitsevyys testataan F-testillä:
+
+```
+Termi           Kerroin         SE        t        p
+const           -0.0049     0.0851   -0.058   0.9541
+Q_2             -0.0280     0.1185   -0.237   0.8137
+Q_3              0.0715     0.1203    0.594   0.5546
+Q_4             -0.0217     0.1203   -0.181   0.8573
+Yhteismerkitsevyys (F-testi, H0: ei kausivaihtelua jäännöksissä):
+F(3,61) = 0.291, p = 0.8316
+```
+
+**Tulos: ei tilastollista näyttöä jäljellä olevasta kausivaihtelusta**
+jäännöksissä (p=0.83, kaukana merkitsevyysrajoista millään tavanomaisella
+tasolla) — kausitasoitus toimii odotetusti, eikä L4-kertoimen suuruus
+selity kausiluonteisella jäännösvaihtelulla. Todennäköisempi selitys on
+tavallinen otantavaihtelu/multikollineaarisuus viereisten viivetermien
+välillä 5-viivemallissa, jossa on vain 65 havaintoa ja 6 selittäjää
+(df_resid=59) — peräkkäiset BKT-kasvun viiveet korreloivat keskenään
+(BKT-kasvu on itsessään persistentti sarja), mikä voi tehdä
+yksittäisistä viivekertoimista epävakaita, vaikka niiden summa (Σb) on
+sekä tarkasti että tilastollisesti erittäin merkitsevästi estimoitu.
+Yksittäisiä viivekertoimia ei siksi pidäkään tulkita erikseen — juuri
+tästä syystä kohdassa 3 pitkän aikavälin vaikutuksena käytetään
+kertoimien summaa, ei yksittäisiä viivekertoimia.
 
 ### 4. Kynnyskasvu (-a/Σb) kaikissa spesifikaatioissa, annualisoituna
 

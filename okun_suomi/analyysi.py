@@ -449,6 +449,12 @@ def tulosta_hac_diagnostiikka(tulos: RobustiTulos) -> None:
         f"Andrews–Monahan-esivalkaistu HAC (L={tulos.pw_viiveet} "
         "esivalkaisun jälkeen)"
     )
+    k_params = len(tulos.param_nimet)
+    df_resid = tulos.nobs - k_params
+    print(
+        f"N = {tulos.nobs}   selittäjiä vakio mukaan lukien k = {k_params}   "
+        f"vapausasteet (df_resid = N-k) = {df_resid}"
+    )
     print("-" * 78)
     print(
         f"{'Termi':<15}{'Kerroin':>11}{'OLS-SE':>11}{'NW-SE':>11}{'AM-SE':>11}"
@@ -503,6 +509,85 @@ def tulosta_hac_diagnostiikka(tulos: RobustiTulos) -> None:
         )
     else:
         print(f"Kynnyskasvu -a/Σb:          {kynnys_v:.3f} % / vuosi")
+
+
+@dataclass
+class KausivaihteluTesti:
+    """Apuregression jäännös ~ vakio + Q2/Q3/Q4-dummyt (Q1 referenssinä)
+    tulos, jolla testataan onko mallin OLS-jäännöksissä jäljellä
+    systemaattista kausivaihtelua siitä huolimatta, että selittäjät on jo
+    kausitasoitettu."""
+
+    apumalli: sm.regression.linear_model.RegressionResultsWrapper
+    f_arvo: float
+    f_p: float
+    df_osoittaja: int
+    df_nimittaja: int
+
+
+def testaa_jaannosten_kausivaihtelu(tulos: RobustiTulos) -> KausivaihteluTesti:
+    """Regressoi ``tulos``-mallin (tavallisen OLS:n) jäännökset
+    neljännesdummyilla (Q2, Q3, Q4; Q1 on referenssi) ja testaa niiden
+    yhteismerkitsevyyden F-testillä.
+
+    Tämä on erillinen, HAC-analyysistä riippumaton tarkistus: jos
+    kausitasoitetuissa sarjoissa on siitä huolimatta jäänyt jäljelle
+    systemaattista neljänneksestä toiseen toistuvaa vaihtelua (esim.
+    epätäydellisen kausitasoituksen takia), se näkyisi tässä
+    apuregressiossa merkitsevinä kausidummyina — mikä voisi selittää
+    myös yksittäisten viivekertoimien (esim. L4 vs. L3) epätasaisuutta.
+
+    Vaatii, että ``tulos.ols.resid``-indeksi on ``pd.PeriodIndex``
+    (freq="Q"), jotta neljännesnumero (1-4) on pääteltävissä.
+    """
+    resid = tulos.ols.resid
+    if not isinstance(resid.index, pd.PeriodIndex):
+        raise TypeError(
+            "testaa_jaannosten_kausivaihtelu vaatii PeriodIndex(freq='Q') "
+            f"-indeksin jäännöksille, saatiin {type(resid.index)}"
+        )
+
+    neljannes = pd.Series(resid.index.quarter, index=resid.index, name="Q")
+    dummyt = pd.get_dummies(neljannes, prefix="Q", drop_first=True).astype(float)
+    x = sm.add_constant(dummyt)
+    apumalli = sm.OLS(resid, x).fit()
+
+    return KausivaihteluTesti(
+        apumalli=apumalli,
+        f_arvo=float(apumalli.fvalue),
+        f_p=float(apumalli.f_pvalue),
+        df_osoittaja=int(apumalli.df_model),
+        df_nimittaja=int(apumalli.df_resid),
+    )
+
+
+def tulosta_kausivaihtelutesti(testi: KausivaihteluTesti, nimi: str) -> None:
+    print()
+    print(f"Jäännösten kausivaihtelutesti: {nimi}")
+    print("(apuregressio: OLS-jäännös ~ vakio + Q2 + Q3 + Q4; Q1 = referenssi)")
+    print(f"{'Termi':<12}{'Kerroin':>11}{'SE':>11}{'t':>9}{'p':>9}")
+    for termi in testi.apumalli.params.index:
+        print(
+            f"{termi:<12}{testi.apumalli.params[termi]:>11.4f}"
+            f"{testi.apumalli.bse[termi]:>11.4f}"
+            f"{testi.apumalli.tvalues[termi]:>9.3f}"
+            f"{testi.apumalli.pvalues[termi]:>9.4f}"
+        )
+    print(
+        f"Yhteismerkitsevyys (F-testi, H0: ei kausivaihtelua jäännöksissä): "
+        f"F({testi.df_osoittaja},{testi.df_nimittaja}) = {testi.f_arvo:.3f}, "
+        f"p = {testi.f_p:.4f}"
+    )
+    if testi.f_p < 0.05:
+        print(
+            "  -> p < 0.05: jäännöksissä ON viitteitä jäljellä olevasta "
+            "kausivaihtelusta huolimatta kausitasoituksesta."
+        )
+    else:
+        print(
+            "  -> p >= 0.05: ei tilastollista näyttöä jäljellä olevasta "
+            "kausivaihtelusta jäännöksissä."
+        )
 
 
 def tulosta_kolmen_otoksen_taulukko(tulokset: Sequence[RobustiTulos]) -> None:

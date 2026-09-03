@@ -140,6 +140,93 @@ def _hae_json_stat2(url: str, kysely: dict) -> dict:
     return data
 
 
+def _hae_taulukon_metatiedot(taulukko_url: str) -> dict:
+    """Hakee PxWeb-taulukon metatiedot (GET-pyyntö, ei kyselyrunkoa) —
+    sisältää mm. jokaisen muuttujan koodit ja niiden selitetekstit.
+    Samat ei-koskaan-korvaavaa-dataa -periaatteet kuin ``_hae_json_stat2``.
+    """
+    try:
+        vastaus = requests.get(taulukko_url, timeout=30)
+    except requests.exceptions.RequestException as exc:
+        raise RuntimeError(
+            f"PxWeb-taulukon metatietoja ({taulukko_url}) ei saatu: {exc}"
+        ) from exc
+
+    if vastaus.status_code != 200:
+        raise RuntimeError(
+            f"PxWeb-taulukko ({taulukko_url}) vastasi statuksella "
+            f"{vastaus.status_code}: {vastaus.text[:500]}"
+        )
+
+    try:
+        return vastaus.json()
+    except ValueError as exc:
+        raise RuntimeError(
+            f"PxWeb-taulukon ({taulukko_url}) metatietoja ei voitu tulkita JSON:ksi"
+        ) from exc
+
+
+def hae_sisaltokoodin_selite(taulukko_url: str, sisaltokoodi: str) -> str:
+    """Hakee PxWeb-taulukon metatiedoista annetun "Tiedot"-sisältökoodin
+    virallisen selitetekstin (esim. ``"Tyottaste_kausi"`` ->
+    ``"Työttömyysaste, %, kausitasoitettu sarja"``).
+
+    Tätä käytetään ajonaikaisesti VARMISTAMAAN — ei vain oletetaan
+    dokumentaation tai koodin nimen perusteella — mikä sarja todella on
+    valittu ja onko se kausitasoitettu.
+    """
+    data = _hae_taulukon_metatiedot(taulukko_url)
+    for muuttuja in data.get("variables", []):
+        if muuttuja.get("code") == "contentscode" or muuttuja.get("text") == "Tiedot":
+            for koodi, teksti in zip(muuttuja["values"], muuttuja["valueTexts"]):
+                if koodi == sisaltokoodi:
+                    return teksti
+    raise RuntimeError(
+        f"Sisältökoodia {sisaltokoodi!r} ei löytynyt taulukon {taulukko_url} "
+        "metatiedoista."
+    )
+
+
+def varmista_qoq_kausitasoitus() -> dict[str, str]:
+    """Varmistaa PxWeb-metatiedoista (ajonaikaisesti, ei pelkän koodin
+    nimen perusteella), että neljännesmuutos-spesifikaation MOLEMMAT
+    sarjat — BKT:n q/q-kasvu ja työttömyysasteen taso, josta q/q-muutos
+    lasketaan — ovat todella kausitasoitettuja PxWebin oman selitetekstin
+    mukaan. Nostaa poikkeuksen, jos selitteessä ei mainita kausitasoitusta.
+
+    Palauttaa sanakirjan {sarja: (taulukko, sisältökoodi, selite)}.
+    """
+    bkt_koodi = GDP_QOQ_KYSELY["query"][1]["selection"]["values"][0]
+    tyottomyys_koodi = TYOTTOMYYS_KUUKAUSI_KYSELY["query"][0]["selection"]["values"][0]
+
+    bkt_selite = hae_sisaltokoodin_selite(GDP_TAULUKKO, bkt_koodi)
+    tyottomyys_selite = hae_sisaltokoodin_selite(
+        TYOTTOMYYS_KUUKAUSI_TAULUKKO, tyottomyys_koodi
+    )
+
+    tulos = {
+        "BKT:n neljännesmuutos (bkt_kasvu_qoq_L*)": (
+            GDP_TAULUKKO,
+            bkt_koodi,
+            bkt_selite,
+        ),
+        "Työttömyysasteen taso, josta q/q-muutos lasketaan": (
+            TYOTTOMYYS_KUUKAUSI_TAULUKKO,
+            tyottomyys_koodi,
+            tyottomyys_selite,
+        ),
+    }
+
+    for nimi, (_taulukko, _koodi, selite) in tulos.items():
+        if "kausitasoi" not in selite.lower():
+            raise RuntimeError(
+                f"{nimi}: PxWeb-metatietojen selite ({selite!r}) ei mainitse "
+                "kausitasoitusta — väärä sisältökoodi valittu?"
+            )
+
+    return tulos
+
+
 def _pxweb_leima_jaksoksi(leima: str) -> pd.Period:
     """Muuttaa PxWebin aikaleiman ("1990Q1" tai "2010M01") pandas Periodiksi.
 
