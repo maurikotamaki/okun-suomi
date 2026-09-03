@@ -12,9 +12,10 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from okun_suomi import analyysi, datahaku
+from okun_suomi import analyysi, datahaku, raportti
 
 KUVAT_HAKEMISTO = Path(__file__).resolve().parent / "kuvat"
+TULOKSET_POLKU = Path(__file__).resolve().parent / "tulokset.md"
 
 
 def main() -> int:
@@ -59,9 +60,15 @@ def main() -> int:
     print(with_pandas_options.tail(5).to_string())
     print()
 
+    # Markdown-lohkot kootaan samassa järjestyksessä kuin konsolitulostus,
+    # ja kirjoitetaan lopuksi tulokset.md-tiedostoon (ks. main()-funktion
+    # loppu).
+    md_osat: list[str] = []
+
     # --- Alkuperäinen spesifikaatio (säilytetty ennallaan) ------------------
     tulos = analyysi.estimoi_okunin_laki(aineisto)
     analyysi.tulosta_tulokset(tulos)
+    md_osat.append(raportti.md_alkuperainen(tulos))
 
     KUVAT_HAKEMISTO.mkdir(exist_ok=True)
     aikasarja_polku = KUVAT_HAKEMISTO / "aikasarjat.png"
@@ -78,6 +85,7 @@ def main() -> int:
     print("#" * 70)
     print("# ROBUSTISUUSTARKASTELU")
     print("#" * 70)
+    md_osat.append("## 2. Robustisuustarkastelu\n")
 
     # 1) OLS/Newey–West/Andrews–Monahan-keskivirheet, Durbin–Watson ja
     #    Breusch–Godfrey alkuperäiselle (koko aineisto, v/v) spesifikaatiolle.
@@ -91,6 +99,7 @@ def main() -> int:
         nw_vahimmaisviive=analyysi.NW_VAHIMMAISVIIVE_VV,
     )
     analyysi.tulosta_hac_diagnostiikka(perus)
+    md_osat.append(raportti.md_hac_taulukko(perus, otsikon_etuliite="2.1 "))
 
     # 2) Kolme rinnakkaista otosta samalla v/v-spesifikaatiolla.
     aineisto_ilman_covidia = aineisto[aineisto["covid"] == 0]
@@ -113,6 +122,7 @@ def main() -> int:
         nw_vahimmaisviive=analyysi.NW_VAHIMMAISVIIVE_VV,
     )
     analyysi.tulosta_kolmen_otoksen_taulukko([perus, ilman_covidia, covid_dummy])
+    md_osat.append(raportti.md_kolmen_otoksen_taulukko([perus, ilman_covidia, covid_dummy]))
 
     # 3) Vaihtoehtoinen spesifikaatio: neljännesmuutokset vuosimuutosten
     #    sijaan (kausitasoitettu BKT edellisneljänneksestä ja kausitasoitettu
@@ -140,6 +150,7 @@ def main() -> int:
         print(f"    taulukko: {taulukko}")
         print(f"    sisältökoodi: {koodi!r}")
         print(f"    PxWeb-selite: {selite!r}")
+    md_osat.append(raportti.md_kausitasoitus(kausitasoitus))
 
     VIIVEET_QOQ = 4
     try:
@@ -169,40 +180,51 @@ def main() -> int:
         nw_vahimmaisviive=analyysi.NW_VAHIMMAISVIIVE_QOQ,
     )
     analyysi.tulosta_hac_diagnostiikka(qoq)
+    md_osat.append(raportti.md_hac_taulukko(qoq, otsikon_etuliite="2.4 "))
 
     # 3b) Jäännösten kausivaihtelutesti viivemallille: jos kausitasoitus
     #     ei ole täydellinen, kausidummyt (Q2-Q4 vs. Q1) näkyisivät
     #     merkitsevinä jäännöksissä — mahdollinen selitys sille, että
     #     yksittäiset viivekertoimet (esim. L4) poikkeavat naapureistaan.
     kausivaihtelutesti = analyysi.testaa_jaannosten_kausivaihtelu(qoq)
-    analyysi.tulosta_kausivaihtelutesti(
-        kausivaihtelutesti, nimi=f"Neljännesmuutokset, viiveet 0-{VIIVEET_QOQ} (q/q)"
-    )
+    nimi_qoq = f"Neljännesmuutokset, viiveet 0-{VIIVEET_QOQ} (q/q)"
+    analyysi.tulosta_kausivaihtelutesti(kausivaihtelutesti, nimi=nimi_qoq)
+    md_osat.append(raportti.md_kausivaihtelutesti(kausivaihtelutesti, nimi=nimi_qoq))
 
     # 4) Kynnyskasvun yhteenveto kaikista spesifikaatioista, annualisoituna
     #    samaan (%/vuosi) yksikköön, jotta v/v- ja q/q-mallit ovat suoraan
     #    vertailukelpoisia.
-    analyysi.tulosta_kynnyskasvu_yhteenveto(
-        [
-            ("Alkuperäinen (v/v, OLS, ei-robusti)", tulos.kynnyskasvu, "v/v"),
-            ("Koko aineisto (v/v, konservatiivinen HAC)", perus.kynnyskasvu(), "v/v"),
-            (
-                "Ilman 2020–2021 (v/v, konservatiivinen HAC)",
-                ilman_covidia.kynnyskasvu(),
-                "v/v",
-            ),
-            (
-                "Covid-dummy, ei-covid-tila (v/v, konservatiivinen HAC)",
-                covid_dummy.kynnyskasvu(),
-                "v/v",
-            ),
-            (
-                f"Neljännesmuutokset, Σb viiveille 0-{VIIVEET_QOQ} (q/q, konservatiivinen HAC)",
-                qoq.kynnyskasvu(),
-                "q/q",
-            ),
-        ]
+    kynnyskasvu_yhteenveto = [
+        ("Alkuperäinen (v/v, OLS, ei-robusti)", tulos.kynnyskasvu, "v/v"),
+        ("Koko aineisto (v/v, konservatiivinen HAC)", perus.kynnyskasvu(), "v/v"),
+        (
+            "Ilman 2020–2021 (v/v, konservatiivinen HAC)",
+            ilman_covidia.kynnyskasvu(),
+            "v/v",
+        ),
+        (
+            "Covid-dummy, ei-covid-tila (v/v, konservatiivinen HAC)",
+            covid_dummy.kynnyskasvu(),
+            "v/v",
+        ),
+        (
+            f"Neljännesmuutokset, Σb viiveille 0-{VIIVEET_QOQ} (q/q, konservatiivinen HAC)",
+            qoq.kynnyskasvu(),
+            "q/q",
+        ),
+    ]
+    analyysi.tulosta_kynnyskasvu_yhteenveto(kynnyskasvu_yhteenveto)
+    md_osat.append(raportti.md_kynnyskasvu_yhteenveto(kynnyskasvu_yhteenveto))
+
+    # --- Tulosten kirjoitus versionhallittavaan tulokset.md-tiedostoon ------
+    raportti.kirjoita_tulokset_md(
+        TULOKSET_POLKU,
+        v_v_viimeinen_havainto=str(aineisto.index.max()),
+        q_q_viimeinen_havainto=str(aineisto_qoq.index.max()),
+        osat=md_osat,
     )
+    print()
+    print(f"Tulokset kirjoitettu: {TULOKSET_POLKU}")
 
     return 0
 

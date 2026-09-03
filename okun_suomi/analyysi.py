@@ -434,7 +434,7 @@ def estimoi_robusti(
     )
 
 
-_KOVARIANSSI_NIMET = {"ols": "OLS", "nw": "Newey–West", "pw": "Andrews–Monahan (esivalk.)"}
+KOVARIANSSI_NIMET = {"ols": "OLS", "nw": "Newey–West", "pw": "Andrews–Monahan (esivalk.)"}
 
 
 def tulosta_hac_diagnostiikka(tulos: RobustiTulos) -> None:
@@ -472,7 +472,7 @@ def tulosta_hac_diagnostiikka(tulos: RobustiTulos) -> None:
     print("-" * 78)
     print(
         f"Päätulokseksi valittu (konservatiivisin): "
-        f"{_KOVARIANSSI_NIMET[tulos.paa_nimi]} "
+        f"{KOVARIANSSI_NIMET[tulos.paa_nimi]} "
         "— pienessä otoksessa HAC-keskivirheet ovat tunnetusti alaspäin "
         "harhaisia, joten päätuloksena käytetään suurempaa SE:tä, ei "
         "kummankaan menetelmän pienintä arvoa."
@@ -491,7 +491,7 @@ def tulosta_hac_diagnostiikka(tulos: RobustiTulos) -> None:
         vaikutus, se, t_arvo, p_arvo = tulos.pitkan_aikavalin_vaikutus("konservatiivinen")
         print(
             f"BKT-kasvun pitkän aikavälin vaikutus (Σb, {len(tulos.kasvu_sarakkeet)} "
-            f"viivettä, {_KOVARIANSSI_NIMET[tulos.paa_nimi]}-SE):"
+            f"viivettä, {KOVARIANSSI_NIMET[tulos.paa_nimi]}-SE):"
         )
         print(f"  Σb = {vaikutus:.4f}  SE = {se:.4f}  t = {t_arvo:.3f}  p = {p_arvo:.4f}")
         f_arvo, p_yhdessa, df1, df2 = tulos.yhteismerkitsevyys("konservatiivinen")

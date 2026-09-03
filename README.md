@@ -11,9 +11,12 @@ lukuja ei ole kovakoodattu tai simuloitu koodiin.
 okun_suomi/
   datahaku.py   # PxWeb-rajapinnasta datan hakeva moduuli (v/v- ja q/q-sarjat)
   analyysi.py   # OLS-regressio, HAC/DW/BG-diagnostiikka, otosvertailut, kuvaajat
-main.py         # ajaa koko putken: haku -> yhdistäminen -> regressio -> robustisuus -> kuvat
+  raportti.py   # muotoilee tulosoliot Markdownixi ja kirjoittaa tulokset.md:n
+main.py         # ajaa koko putken: haku -> yhdistäminen -> regressio -> robustisuus -> kuvat -> tulokset.md
 requirements.txt
-kuvat/          # tähän tallentuvat piirretyt kuvat (aikasarjat.png, hajontakuvio.png)
+kuvat/          # tähän tallentuvat piirretyt kuvat (aikasarjat.png, hajontakuvio.png) — upotettu README:hin alla
+tulokset.md     # versionhallittava tuloskooste (kertoimet, kolme keskivirhettä, N/df, testit, kynnyskasvut);
+                # ylikirjoittuu joka ajolla, committoidaan git-historiaan ajojen väliseksi diffiksi
 ```
 
 ## Käytetty data
@@ -105,11 +108,18 @@ Skripti tulostaa:
    viivemuotoisen neljännesmuutos-spesifikaation, sekä annualisoidun
    kynnyskasvuyhteenvedon (ks. alla "Robustisuustarkastelu"),
 
-ja tallentaa hakemistoon `kuvat/`:
-- `aikasarjat.png` — BKT:n kasvu ja työttömyysasteen muutos samassa
-  kuvassa (kaksi y-akselia),
-- `hajontakuvio.png` — hajontakuvio BKT-kasvusta ja työttömyysasteen
-  muutoksesta OLS-sovitesuoralla.
+ja tallentaa:
+- hakemistoon `kuvat/`:
+  - `aikasarjat.png` — BKT:n kasvu ja työttömyysasteen muutos samassa
+    kuvassa (kaksi y-akselia), upotettuna myös tähän READMEen alla,
+  - `hajontakuvio.png` — hajontakuvio BKT-kasvusta ja työttömyysasteen
+    muutoksesta OLS-sovitesuoralla, upotettuna myös tähän READMEen alla,
+- `tulokset.md` — versionhallittava Markdown-kooste kaikista taulukoista
+  (kertoimet, OLS/NW/AM-keskivirheet, N ja vapausasteet, DW/BG- ja
+  kausivaihtelutestit, kynnyskasvut), alkuun merkittynä ajon UTC-
+  aikaleima ja käytetyn datan viimeinen havainto. Committoi tiedosto
+  git-historiaan ajojen välillä, jotta tulosten muutokset (esim.
+  Tilastokeskuksen datapäivitysten myötä) näkyvät diffinä.
 
 ## Esimerkkitulos
 
@@ -130,6 +140,18 @@ mukainen (negatiivinen), mutta selitysaste on matala — Suomen
 työttömyysasteen vaihtelusta valtaosa selittyy muilla tekijöillä kuin
 pelkällä BKT:n kasvulla. Koska data haetaan rajapinnasta joka ajokerralla,
 tarkat luvut päivittyvät Tilastokeskuksen datan päivittyessä.
+
+**BKT:n kasvu ja työttömyysasteen muutos samassa kuvassa:**
+
+![BKT:n kasvu ja työttömyysasteen muutos, Suomi](kuvat/aikasarjat.png)
+
+**Hajontakuvio ja OLS-sovitesuora:**
+
+![Okunin laki: hajontakuvio ja sovitesuora](kuvat/hajontakuvio.png)
+
+Molemmat kuvat päivittyvät joka ajolla (`python main.py`) tuoreimmalla
+haetulla datalla — committoi päivittyneet PNG-tiedostot, jos haluat
+niiden näkyvän myös reposivulla ajantasaisina.
 
 ## Robustisuustarkastelu
 
