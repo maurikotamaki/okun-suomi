@@ -1,6 +1,6 @@
 # Okunin lain analyysin tulokset — Suomi
 
-- **Ajettu:** 2026-09-03 17:10:39 UTC
+- **Ajettu:** 2026-09-03 19:08:21 UTC
 - **Datan viimeinen havainto (v/v-aineisto):** 2026Q2
 - **Datan viimeinen havainto (q/q-aineisto):** 2026Q2
 - **Lähde:** Tilastokeskuksen PxWeb-rajapinta (StatFin), haettu ajonaikaisesti — ei kovakoodattua tai simuloitua dataa.
