@@ -1,0 +1,56 @@
+name: Kuukausittainen datapäivitys
+
+# Ajaa main.py:n kerran kuussa, hakee tuoreimman datan Tilastokeskuksen
+# PxWeb-rajapinnasta ja committoi päivittyneet tulokset.md:n ja kuvat/
+# -kansion kuvat mainiin, mutta VAIN jos jokin niistä todella muuttui.
+#
+# workflow_dispatch mahdollistaa manuaalisen käynnistyksen testausta
+# varten (Actions-välilehti -> Kuukausittainen datapäivitys -> Run workflow).
+
+on:
+  schedule:
+    # Kerran kuussa, kuun 1. päivä klo 05:00 UTC.
+    - cron: "0 5 1 * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  paivita:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Haetaan repo
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: main
+
+      - name: Asennetaan Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Asennetaan riippuvuudet
+        run: pip install -r requirements.txt
+
+      - name: Ajetaan main.py
+        run: python main.py
+
+      - name: Committoidaan muuttuneet tulokset.md ja kuvat, jos data muuttui
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add tulokset.md kuvat/
+
+          if git diff --cached --quiet; then
+            echo "Ei muutoksia tulokset.md:ssä tai kuvissa - ei committoida."
+            exit 0
+          fi
+
+          git commit -m "Päivitä tulokset.md ja kuvat (kuukausittainen ajo)"
+          git push origin HEAD:main
