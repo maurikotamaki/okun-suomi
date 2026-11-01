@@ -1,6 +1,6 @@
 # Okunin lain analyysin tulokset — Suomi
 
-- **Ajettu:** 2026-10-01 11:25:38 UTC
+- **Ajettu:** 2026-11-01 11:43:32 UTC
 - **Datan viimeinen havainto (v/v-aineisto):** 2026Q2
 - **Datan viimeinen havainto (q/q-aineisto):** 2026Q2
 - **Lähde:** Tilastokeskuksen PxWeb-rajapinta (StatFin), haettu ajonaikaisesti — ei kovakoodattua tai simuloitua dataa.
@@ -63,20 +63,20 @@ N = 65, selittäjiä (vakio mukaan lukien) k = 6, vapausasteet df_resid = N-k = 
 
 | Termi | Kerroin | OLS-SE | NW-SE | AM-SE (esivalk.) |
 |---|---:|---:|---:|---:|
-| const | 0.1053 | 0.0483 | 0.0452 | 0.0414 |
-| bkt_kasvu_qoq_L0 | -0.1035 | 0.0363 | 0.0322 | 0.0313 |
-| bkt_kasvu_qoq_L1 | -0.1000 | 0.0371 | 0.0338 | 0.0363 |
-| bkt_kasvu_qoq_L2 | -0.0764 | 0.0367 | 0.0251 | 0.0253 |
-| bkt_kasvu_qoq_L3 | -0.0246 | 0.0371 | 0.0227 | 0.0229 |
-| bkt_kasvu_qoq_L4 | -0.0783 | 0.0360 | 0.0237 | 0.0220 |
+| const | 0.1056 | 0.0475 | 0.0452 | 0.0421 |
+| bkt_kasvu_qoq_L0 | -0.1064 | 0.0356 | 0.0336 | 0.0330 |
+| bkt_kasvu_qoq_L1 | -0.0989 | 0.0364 | 0.0337 | 0.0358 |
+| bkt_kasvu_qoq_L2 | -0.0749 | 0.0360 | 0.0261 | 0.0262 |
+| bkt_kasvu_qoq_L3 | -0.0239 | 0.0364 | 0.0221 | 0.0222 |
+| bkt_kasvu_qoq_L4 | -0.0753 | 0.0354 | 0.0231 | 0.0217 |
 
 - Newey–West-viiveet L = 3; Andrews–Monahan-esivalkaisun jälkeiset viiveet L = 3
 - Päätulokseksi valittu (konservatiivisin): **Andrews–Monahan (esivalk.)** (suurempi SE kahdesta HAC-vaihtoehdosta BKT-kasvun kokonaisvaikutukselle)
-- Durbin–Watson: 2.153 (2.0 = ei autokorrelaatiota; <2 → positiivinen)
-- Breusch–Godfrey (L=3): LM=3.479, p=0.3235 (H0: ei jäljellä olevaa autokorrelaatiota)
-- BKT-kasvun pitkän aikavälin vaikutus (Σb, 5 viivettä, Andrews–Monahan (esivalk.)-SE): Σb = -0.3829, SE = 0.0811, t = -4.724, p = 0.0000
-- Viiveiden yhteismerkitsevyys (Wald F, H0: kaikki BKT-viiveiden kertoimet = 0): F(5,59) = 9.700, p = 0.0000
-- Kynnyskasvu -a/Σb: 0.275 %/neljännes → annualisoituna **1.105 %/vuosi**
+- Durbin–Watson: 2.140 (2.0 = ei autokorrelaatiota; <2 → positiivinen)
+- Breusch–Godfrey (L=3): LM=4.226, p=0.2380 (H0: ei jäljellä olevaa autokorrelaatiota)
+- BKT-kasvun pitkän aikavälin vaikutus (Σb, 5 viivettä, Andrews–Monahan (esivalk.)-SE): Σb = -0.3795, SE = 0.0792, t = -4.792, p = 0.0000
+- Viiveiden yhteismerkitsevyys (Wald F, H0: kaikki BKT-viiveiden kertoimet = 0): F(5,59) = 8.736, p = 0.0000
+- Kynnyskasvu -a/Σb: 0.278 %/neljännes → annualisoituna **1.118 %/vuosi**
 
 ### 2.5 Jäännösten kausivaihtelutesti
 
@@ -84,12 +84,12 @@ Malli: Neljännesmuutokset, viiveet 0-4 (q/q). Apuregressio: OLS-jäännös ~ va
 
 | Termi | Kerroin | SE | t | p |
 |---|---:|---:|---:|---:|
-| const | -0.0074 | 0.0864 | -0.086 | 0.9319 |
-| Q_2 | -0.0468 | 0.1204 | -0.389 | 0.6987 |
-| Q_3 | 0.0876 | 0.1222 | 0.717 | 0.4762 |
-| Q_4 | -0.0077 | 0.1222 | -0.063 | 0.9499 |
+| const | 0.0016 | 0.0851 | 0.019 | 0.9851 |
+| Q_2 | -0.0411 | 0.1185 | -0.347 | 0.7298 |
+| Q_3 | 0.0693 | 0.1203 | 0.576 | 0.5667 |
+| Q_4 | -0.0321 | 0.1203 | -0.267 | 0.7907 |
 
-Yhteismerkitsevyys (F-testi, H0: ei kausivaihtelua jäännöksissä): F(3,61) = 0.439, p = 0.7258
+Yhteismerkitsevyys (F-testi, H0: ei kausivaihtelua jäännöksissä): F(3,61) = 0.351, p = 0.7886
 
 **p ≥ 0.05: ei tilastollista näyttöä jäljellä olevasta kausivaihtelusta** jäännöksissä.
 
@@ -103,4 +103,4 @@ BKT:n kasvuvauhti (%/vuosi), jolla työttömyysaste ei muutu. q/q-mallien neljä
 | Koko aineisto (v/v, konservatiivinen HAC) | v/v | 1.648 |
 | Ilman 2020–2021 (v/v, konservatiivinen HAC) | v/v | 1.464 |
 | Covid-dummy, ei-covid-tila (v/v, konservatiivinen HAC) | v/v | 1.457 |
-| Neljännesmuutokset, Σb viiveille 0-4 (q/q, konservatiivinen HAC) | q/q | 1.105 |
+| Neljännesmuutokset, Σb viiveille 0-4 (q/q, konservatiivinen HAC) | q/q | 1.118 |
